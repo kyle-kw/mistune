@@ -46,6 +46,115 @@ class TestMarkdownRendererRoundTrip(TestCase):
     def test_escaped_backtick(self):
         self.assert_round_trip(r"\`not code\`" + "\n")
 
+    def test_literal_brackets_not_reparsed_as_links_or_images(self):
+        for text in (
+            r"Use \[draft\](report.txt) for details.",
+            r"Use \[draft](report.txt) for details.",
+            r"Use [draft\](report.txt) for details.",
+            r"Use !\[chart\](chart.png) as the example.",
+            r"Use !\[chart](chart.png) as the example.",
+            r"Use ![chart\](chart.png) as the example.",
+            r"The \[link\] is literal." + "\n\n[link]: /destination\n",
+            r"The !\[chart\] is literal." + "\n\n[chart]: chart.png\n",
+            r"\[draft\]\[ref\]" + "\n\n[ref]: report.txt\n",
+            r"!\[chart\]\[ref\]" + "\n\n[ref]: chart.png\n",
+            r"\[draft\]\[\]" + "\n\n[draft]: report.txt\n",
+        ):
+            with self.subTest(text=text):
+                self.assert_round_trip(text)
+
+    def test_literal_brackets_in_link_and_image_labels(self):
+        for text in (
+            r"[Use \] to close the array](/guide)",
+            r"[Use \[ to open the array](/guide)",
+            r"![Plot \] detail](chart.png)",
+            r"![Plot \[ detail](chart.png)",
+            r"[Use \] here][guide]" + "\n\n[guide]: /guide\n",
+            r"![Plot \[ detail][chart]" + "\n\n[chart]: chart.png\n",
+            r"[A *literal \]* in a label](/guide)",
+            r"[![Plot \] detail](chart.png)](/guide)",
+            "[Nested [brackets]](/guide)",
+            "![Nested [brackets]](chart.png)",
+        ):
+            with self.subTest(text=text):
+                self.assert_round_trip(text)
+
+    def test_literal_brackets_in_text_tokens(self):
+        for text, expected in (
+            ("array[index]", r"array\[index\]"),
+            ("unmatched [ bracket", r"unmatched \[ bracket"),
+            ("unmatched ] bracket", r"unmatched \] bracket"),
+            (r"Use \[draft\](report.txt).", r"Use \[draft\](report.txt)."),
+            (r"[Use \] here](/guide)", r"[Use \] here](/guide)"),
+            (r"![Plot \[ detail](chart.png)", r"![Plot \[ detail](chart.png)"),
+        ):
+            with self.subTest(text=text):
+                output = self.reformat(text)
+                self.assertEqual(output, expected + "\n")
+                self.assertEqual(self.reformat(output), output)
+                self.assert_round_trip(text)
+
+        # Hooks may merge inline text tokens; brackets still need escaping.
+        renderer = MarkdownRenderer()
+        self.assertEqual(
+            renderer.text({"type": "text", "raw": "Use [draft](report.txt)."}, BlockState()),
+            r"Use \[draft\](report.txt).",
+        )
+
+    def test_literal_brackets_in_blocks_and_emphasis(self):
+        for text in (
+            r"# Use \[draft\](report.txt)",
+            r"- Use \[draft\](report.txt)",
+            r"> Use \[draft\](report.txt)",
+            r"*Use \[draft\](report.txt)*",
+            r"**Use \[draft\](report.txt)**",
+            "First line\n" + r"\[draft\](report.txt)",
+        ):
+            with self.subTest(text=text):
+                self.assert_round_trip(text)
+
+    def test_literal_brackets_with_backslashes(self):
+        for text in (
+            r"[\\`a]`",
+            r"[\*`a]`",
+            r"\\\[draft\](report.txt)",
+            r"Use \\ before \[draft\](report.txt).",
+            r"[Use \\ before \] here](/guide)",
+            r"![Use \\ before \[ here](chart.png)",
+            r"[C:\documents\draft]",
+        ):
+            with self.subTest(text=text):
+                self.assert_round_trip(text)
+                output = self.reformat(text)
+                self.assertEqual(self.reformat(output), output)
+
+    def test_bracket_escaping_preserves_real_markup(self):
+        for text in (
+            "[draft](report.txt)",
+            "![chart](chart.png)",
+            "[draft][ref]\n\n[ref]: report.txt",
+            "![chart][ref]\n\n[ref]: chart.png",
+            "<https://example.com/path>",
+            "<user@example.com>",
+            "`[draft](report.txt)`",
+            "```\n[draft](report.txt)\n```",
+            '<span title="[draft]">example</span>',
+            "<div>\n[draft](report.txt)\n</div>",
+            '[draft](report.txt "[title]")',
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(self.reformat(text), text + "\n")
+                self.assert_round_trip(text)
+
+    def test_brackets_in_autolinks(self):
+        for text in (
+            "<https://example.com/[draft]>",
+            "<https://example.com/draft]>",
+            "<https://[::1]/>",
+        ):
+            with self.subTest(text=text):
+                self.assert_round_trip(text)
+
     def test_escaped_emphasis_markers(self):
         # an escaped "*"/"_" is a literal delimiter, not emphasis; re-emitting
         # it unescaped would turn plain text back into <em>/<strong>
@@ -178,6 +287,32 @@ class TestMarkdownRendererPlugins(TestCase):
         md = create_markdown(renderer=MarkdownRenderer(), plugins=["table"])
         result = md("| A | B |\n|---|---|\n| 1 | 2 |\n")
         self.assertEqual(result, "| A | B |\n| --- | --- |\n| 1 | 2 |\n")
+
+    def test_literal_brackets_with_plugins(self):
+        for plugins, text, expected in (
+            (
+                ["task_lists"],
+                r"- [x] Use \[draft\](report.txt)",
+                r"- [x] Use \[draft\](report.txt)" + "\n",
+            ),
+            (
+                ["table"],
+                "| [Heading] |\n| --- |\n| " + r"\[draft\](report.txt) |",
+                r"| \[Heading\] |" + "\n| --- |\n| " + r"\[draft\](report.txt) |" + "\n",
+            ),
+            (
+                ["url"],
+                r"See https://example.com and \[draft\](report.txt)",
+                r"See <https://example.com> and \[draft\](report.txt)" + "\n",
+            ),
+        ):
+            with self.subTest(plugins=plugins, text=text):
+                reformat = create_markdown(renderer=MarkdownRenderer(), plugins=plugins)
+                to_html = create_markdown(escape=False, plugins=plugins)
+                output = reformat(text)
+                self.assertEqual(output, expected)
+                self.assertEqual(to_html(output), to_html(text))
+                self.assertEqual(reformat(output), output)
 
     def test_standalone_list_item(self):
         renderer = MarkdownRenderer()

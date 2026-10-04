@@ -6,6 +6,10 @@ Here is the full history of mistune v3.
 Unreleased
 ----------
 
+* Preserve literal square brackets in Markdown renderer text so reformatting
+  does not introduce links or images or break their labels. Escape literal
+  backslashes first so they cannot interfere with the generated escapes.
+
 Version 3.3.4
 -------------
 
